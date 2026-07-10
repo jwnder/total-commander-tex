@@ -57,4 +57,13 @@ internal static class GdiPlusMethods
         nint imageAttributes,
         nint callback,
         nint callbackData);
+
+    [DllImport("gdiplus.dll", EntryPoint = "GdipTranslateWorldTransform")]
+    internal static extern int TranslateWorldTransform(nint graphics, float dx, float dy, int order);
+
+    [DllImport("gdiplus.dll", EntryPoint = "GdipRotateWorldTransform")]
+    internal static extern int RotateWorldTransform(nint graphics, float angle, int order);
+
+    [DllImport("gdiplus.dll", EntryPoint = "GdipResetWorldTransform")]
+    internal static extern int ResetWorldTransform(nint graphics);
 }

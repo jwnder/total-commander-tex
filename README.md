@@ -120,4 +120,6 @@ Manual install:
 
 - Rendered pages are cached under the Windows temp folder.
 - In the rendered page viewer, use `+` to zoom in, `-` to zoom out, and `0` to reset to fit-to-window.
+- Use arrow keys or the mouse wheel to pan inside a zoomed page. Use Page Up/Page Down to change pages.
+- Use `L` to rotate left and `R` to rotate right.
 - It exports both Unicode and ANSI WLX entry points so current Total Commander versions can use `ListLoadW` while older plugin probing still has compatible exports.

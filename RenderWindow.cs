@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 internal static unsafe class RenderWindow
 {
     private const string ClassName = "TexListerRenderWindow";
+    private const int ScrollStep = 80;
     private static readonly ConcurrentDictionary<nint, ViewerState> States = new();
     private static bool _registered;
     private static nint _gdiplusToken;
@@ -107,16 +108,28 @@ internal static unsafe class RenderWindow
         switch (key)
         {
             case 0x21: // Page Up
-            case 0x25: // Left
-            case 0x26: // Up
                 state.Previous();
                 NativeMethods.InvalidateRect(hwnd, 0, true);
                 break;
             case 0x20: // Space
             case 0x22: // Page Down
-            case 0x27: // Right
-            case 0x28: // Down
                 state.Next();
+                NativeMethods.InvalidateRect(hwnd, 0, true);
+                break;
+            case 0x25: // Left
+                state.PanBy(-ScrollStep, 0);
+                NativeMethods.InvalidateRect(hwnd, 0, true);
+                break;
+            case 0x26: // Up
+                state.PanBy(0, -ScrollStep);
+                NativeMethods.InvalidateRect(hwnd, 0, true);
+                break;
+            case 0x27: // Right
+                state.PanBy(ScrollStep, 0);
+                NativeMethods.InvalidateRect(hwnd, 0, true);
+                break;
+            case 0x28: // Down
+                state.PanBy(0, ScrollStep);
                 NativeMethods.InvalidateRect(hwnd, 0, true);
                 break;
             case 0x24: // Home
@@ -142,6 +155,14 @@ internal static unsafe class RenderWindow
                 state.ResetZoom();
                 NativeMethods.InvalidateRect(hwnd, 0, true);
                 break;
+            case 0x4C: // L
+                state.RotateLeft();
+                NativeMethods.InvalidateRect(hwnd, 0, true);
+                break;
+            case 0x52: // R
+                state.RotateRight();
+                NativeMethods.InvalidateRect(hwnd, 0, true);
+                break;
         }
     }
 
@@ -155,11 +176,11 @@ internal static unsafe class RenderWindow
         short delta = unchecked((short)(((long)wParam >> 16) & 0xffff));
         if (delta < 0)
         {
-            state.Next();
+            state.PanBy(0, ScrollStep);
         }
         else
         {
-            state.Previous();
+            state.PanBy(0, -ScrollStep);
         }
 
         NativeMethods.InvalidateRect(hwnd, 0, true);
@@ -211,17 +232,28 @@ internal static unsafe class RenderWindow
         GdiPlusMethods.GetImageHeight(image, out uint imageHeight);
         int clientWidth = Math.Max(1, rect.Right - rect.Left);
         int clientHeight = Math.Max(1, rect.Bottom - rect.Top);
-        double scale = Math.Min((double)clientWidth / imageWidth, (double)clientHeight / imageHeight) * state.Zoom;
+        bool rotated = state.RotationDegrees is 90 or 270;
+        uint fitWidth = rotated ? imageHeight : imageWidth;
+        uint fitHeight = rotated ? imageWidth : imageHeight;
+        double scale = Math.Min((double)clientWidth / fitWidth, (double)clientHeight / fitHeight) * state.Zoom;
         int drawWidth = Math.Max(1, (int)(imageWidth * scale));
         int drawHeight = Math.Max(1, (int)(imageHeight * scale));
-        int drawX = (clientWidth - drawWidth) / 2;
-        int drawY = (clientHeight - drawHeight) / 2;
+        int rotatedWidth = rotated ? drawHeight : drawWidth;
+        int rotatedHeight = rotated ? drawWidth : drawHeight;
+
+        state.ClampPan(clientWidth, clientHeight, rotatedWidth, rotatedHeight);
+
+        int drawX = (clientWidth - rotatedWidth) / 2 - state.PanX;
+        int drawY = (clientHeight - rotatedHeight) / 2 - state.PanY;
+
+        GdiPlusMethods.TranslateWorldTransform(graphics, drawX + rotatedWidth / 2f, drawY + rotatedHeight / 2f, 0);
+        GdiPlusMethods.RotateWorldTransform(graphics, state.RotationDegrees, 0);
 
         GdiPlusMethods.DrawImageRectRectI(
             graphics,
             image,
-            drawX,
-            drawY,
+            -drawWidth / 2,
+            -drawHeight / 2,
             drawWidth,
             drawHeight,
             0,
@@ -232,11 +264,13 @@ internal static unsafe class RenderWindow
             0,
             0,
             0);
+
+        GdiPlusMethods.ResetWorldTransform(graphics);
     }
 
     private static void DrawPageText(nint hdc, ViewerState state)
     {
-        string text = $"Page {state.PageNumber} / {state.PageCount}  Zoom {state.ZoomPercent}%";
+        string text = $"Page {state.PageNumber} / {state.PageCount}  Zoom {state.ZoomPercent}%  Rotate {state.RotationDegrees}°";
         NativeMethods.SetBkMode(hdc, NativeMethods.TRANSPARENT);
         NativeMethods.SetTextColor(hdc, 0x00505050);
         NativeMethods.TextOut(hdc, 12, 10, text, text.Length);
@@ -249,6 +283,9 @@ internal static unsafe class RenderWindow
         private nint _loadedImage;
         private string? _loadedPath;
         private double _zoom = 1.0;
+        private int _panX;
+        private int _panY;
+        private int _rotationDegrees;
 
         internal ViewerState(List<string> images)
         {
@@ -263,11 +300,18 @@ internal static unsafe class RenderWindow
 
         internal int ZoomPercent => (int)Math.Round(_zoom * 100);
 
+        internal int PanX => _panX;
+
+        internal int PanY => _panY;
+
+        internal int RotationDegrees => _rotationDegrees;
+
         internal void Next()
         {
             if (_index < _images.Count - 1)
             {
                 _index++;
+                ResetViewOffset();
             }
         }
 
@@ -276,17 +320,20 @@ internal static unsafe class RenderWindow
             if (_index > 0)
             {
                 _index--;
+                ResetViewOffset();
             }
         }
 
         internal void GoToStart()
         {
             _index = 0;
+            ResetViewOffset();
         }
 
         internal void GoToEnd()
         {
             _index = Math.Max(0, _images.Count - 1);
+            ResetViewOffset();
         }
 
         internal void ZoomIn()
@@ -297,11 +344,57 @@ internal static unsafe class RenderWindow
         internal void ZoomOut()
         {
             _zoom = Math.Max(0.2, _zoom / 1.25);
+            ClampPanToZeroIfFit();
         }
 
         internal void ResetZoom()
         {
             _zoom = 1.0;
+            _panX = 0;
+            _panY = 0;
+        }
+
+        internal void PanBy(int dx, int dy)
+        {
+            _panX += dx;
+            _panY += dy;
+        }
+
+        internal void RotateLeft()
+        {
+            _rotationDegrees = (_rotationDegrees + 270) % 360;
+            _panX = 0;
+            _panY = 0;
+        }
+
+        internal void RotateRight()
+        {
+            _rotationDegrees = (_rotationDegrees + 90) % 360;
+            _panX = 0;
+            _panY = 0;
+        }
+
+        internal void ClampPan(int clientWidth, int clientHeight, int contentWidth, int contentHeight)
+        {
+            int maxPanX = Math.Max(0, (contentWidth - clientWidth) / 2);
+            int maxPanY = Math.Max(0, (contentHeight - clientHeight) / 2);
+            _panX = Math.Clamp(_panX, -maxPanX, maxPanX);
+            _panY = Math.Clamp(_panY, -maxPanY, maxPanY);
+        }
+
+        private void ResetViewOffset()
+        {
+            _panX = 0;
+            _panY = 0;
+        }
+
+        private void ClampPanToZeroIfFit()
+        {
+            if (_zoom <= 1.0)
+            {
+                _panX = 0;
+                _panY = 0;
+            }
         }
 
         internal nint GetCurrentImage()
