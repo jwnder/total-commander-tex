@@ -1,0 +1,7 @@
+[plugininstall]
+description=TeX source viewer
+type=wlx
+file=texview.wlx64
+file=texview.wlx
+detect=EXT="TEX" | EXT="LATEX" | EXT="LTX" | EXT="STY" | EXT="CLS" | EXT="PS" | EXT="EPS"
+defaultdir=texview

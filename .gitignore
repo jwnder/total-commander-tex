@@ -1,0 +1,12 @@
+samples/
+bin/
+obj/
+dist/
+render_test*/
+render_test_*/
+$outDir/
+*.aux
+*.log
+*.out
+*.pdf
+*.synctex.gz
